@@ -1,4 +1,6 @@
-﻿-- Exercise Question 1
+﻿use AdventureWorks2008R2;
+
+-- Exercise Question 1
 /*
 Using an AdventureWorks database, write a query to
 retrieve the top 3 products for the customer id's between 30000 and 30005.
@@ -26,10 +28,12 @@ on sh.SalesOrderID = sd.SalesOrderID
 where CustomerID between 30000 and 30005
     group by CustomerID, ProductID)
 select t1.CustomerID,
-STUFF((SELECT  ', '+RTRIM(CAST(ProductID as char))  
+STUFF (
+      (SELECT  ', '+RTRIM(CAST(ProductID as char))  
        FROM temp 
        WHERE CustomerID = t1.CustomerID and TopProduct <=3
-       FOR XML PATH('')) , 1, 2, '') AS Top3Products
+       FOR XML PATH('')
+	   ) , 1, 2, '') AS Top3Products
 from temp t1
 where t1.TopProduct <= 3
 group by t1.CustomerID;
@@ -79,3 +83,101 @@ where p.BusinessEntityID in
 (select distinct SalesPersonID from Sales.SalesOrderHeader where SalesPersonID is 
 not null)
 order by SalesPersonID;
+
+-------------------------------------------------------------------------------------------------------------
+-- Horizontal format (Short list) using SELECT TOP 1 WITH TIES and FOR XML PATH
+SELECT distinct TERRITORYID,
+       STUFF(
+   (SELECT TOP 1 WITH TIES ', ' + CAST(a.CustomerID AS CHAR(5))
+    FROM Sales.SalesOrderHeader a
+WHERE a.TERRITORYID = b.TERRITORYID
+    GROUP BY TERRITORYID, CustomerID
+ORDER BY  COUNT(SalesOrderID) DESC --a.totaldue desc
+FOR XML PATH('')
+   ), 1, 2, '') OrderCount
+FROM Sales.SalesOrderHeader b
+ORDER BY TERRITORYID;
+
+-- Horizontal format (Short list) using RANK and FOR XML PATH
+WITH temp AS
+(SELECT TERRITORYID, CustomerID,
+ RANK() OVER (PARTITION BY TERRITORYID  ORDER BY COUNT(SalesOrderID) DESC) AS 
+CustomerRank 
+ FROM Sales.SalesOrderHeader
+ GROUP BY TERRITORYID, CustomerID)
+SELECT DISTINCT TERRITORYID, 
+        STUFF((SELECT ', ' + CAST(CustomerID AS CHAR(5)) 
+    FROM temp 
+WHERE TERRITORYID = t1.TERRITORYID AND CustomerRank = 1 
+ORDER BY CustomerID
+FOR XML PATH('')), 1,2,'') TopCustomers
+FROM temp t1;
+ 
+--SELECT TOP 1 WITH TIES in a function and CROSS APPLY
+go
+create function dbo.ufGetTerritoryTopCustomer
+     (@tid int)
+  returns table as
+    return
+         SELECT TOP 1 WITH TIES TERRITORYID, CustomerID
+      FROM Sales.SalesOrderHeader
+  WHERE TERRITORYID = @tid
+     GROUP BY TERRITORYID, CustomerID
+ ORDER BY  COUNT(SalesOrderID) DESC;
+ go
+
+SELECT distinct s.TERRITORYID, u.CustomerID
+FROM Sales.SalesOrderHeader s
+CROSS APPLY dbo.ufGetTerritoryTopCustomer(TERRITORYID) u
+ORDER BY s.TERRITORYID;
+
+-- Horizontal Format (Short List)
+with temp as (
+SELECT distinct s.TERRITORYID, u.CustomerID
+FROM Sales.SalesOrderHeader s
+CROSS APPLY dbo.ufGetTerritoryTopCustomer(TERRITORYID) u)
+SELECT DISTINCT TERRITORYID, 
+        STUFF((SELECT ', ' + CAST(CustomerID AS CHAR(5)) 
+    FROM temp t2
+WHERE t2.TERRITORYID = t1.TERRITORYID
+ORDER BY CustomerID
+FOR XML PATH('')), 1,2,'')
+FROM temp t1;
+
+-- Use SELECT TOP 1 WITH TIES in a derived table and CROSS APPLY
+with temp as (
+SELECT distinct s.TERRITORYID, u.CustomerID
+FROM Sales.SalesOrderHeader s
+CROSS APPLY
+(       SELECT TOP 1 WITH TIES TERRITORYID, CustomerID
+    FROM Sales.SalesOrderHeader
+WHERE TERRITORYID = s.TERRITORYID
+    GROUP BY TERRITORYID, CustomerID
+ORDER BY  COUNT(SalesOrderID) DESC) u
+)
+SELECT DISTINCT TERRITORYID, 
+        STUFF((SELECT ', ' + CAST(CustomerID AS CHAR(5)) 
+    FROM temp t2
+WHERE t2.TERRITORYID = t1.TERRITORYID
+ORDER BY CustomerID
+FOR XML PATH('')), 1,2,'')
+FROM temp t1;
+
+
+-- RANK works well with PARTITION BY 
+SELECT TERRITORYID, CustomerID FROM
+(SELECT TERRITORYID, CustomerID, COUNT(SalesOrderID) TotalOrder,
+ RANK() OVER (PARTITION BY TERRITORYID  ORDER BY COUNT(SalesOrderID) DESC) AS 
+CustomerRank 
+ FROM Sales.SalesOrderHeader
+ GROUP BY TERRITORYID, CustomerID) temp
+WHERE CustomerRank = 1;
+-- Can easily add more columns
+SELECT TERRITORYID, CustomerID, TotalOrder FROM
+(SELECT TERRITORYID, CustomerID, COUNT(SalesOrderID) TotalOrder,
+ RANK() OVER (PARTITION BY TERRITORYID  ORDER BY COUNT(SalesOrderID) DESC) AS 
+CustomerRank 
+ FROM Sales.SalesOrderHeader
+ GROUP BY TERRITORYID, CustomerID) temp
+WHERE CustomerRank = 1;
+
